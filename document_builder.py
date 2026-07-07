@@ -21,7 +21,7 @@ import re
 import json
 import os
 
-CSV_PATH = "C:\\Users\ASUS\Downloads\matches_1930_2022.csv"
+CSV_PATH = r"C:\Users\ASUS\Downloads\matches_1930_2022.csv"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -147,82 +147,82 @@ def build_document(row: dict, doc_id: int) -> dict:
     """Convert one CSV row into a searchable document."""
 
     # ── basic fields ─────────────────────────────────────────────────────
-    home_team    = str(row.get("home_team", "")).strip()
-    away_team    = str(row.get("away_team", "")).strip()
-    round_       = str(row.get("Round",    "")).strip()
-    date         = str(row.get("Date",     "")).strip()
-    venue        = str(row.get("Venue",    "")).strip()
-    score        = str(row.get("Score",    "")).strip()
-    notes        = str(row.get("Notes",    "")).strip()
-    year         = str(row.get("Year",     "")).strip()
-    host         = str(row.get("Host",     "")).strip()
-    home_score   = str(row.get("home_score","")).strip()
-    away_score   = str(row.get("away_score","")).strip()
-    home_manager = str(row.get("home_manager","")).strip()
-    away_manager = str(row.get("away_manager","")).strip()
-    home_captain = str(row.get("home_captain","")).strip()
-    away_captain = str(row.get("away_captain","")).strip()
-    referee      = get_referee(row.get("Officials",""), row.get("Referee",""))
+    home_team = str(row.get("home_team", "")).strip()
+    away_team = str(row.get("away_team", "")).strip()
+    round_ = str(row.get("Round", "")).strip()
+    date = str(row.get("Date", "")).strip()
+    venue = str(row.get("Venue", "")).strip()
+    score = str(row.get("Score", "")).strip()
+    notes = str(row.get("Notes", "")).strip()
+    year = str(row.get("Year", "")).strip()
+    host = str(row.get("Host", "")).strip()
+    home_score = str(row.get("home_score", "")).strip()
+    away_score = str(row.get("away_score", "")).strip()
+    home_manager = str(row.get("home_manager", "")).strip()
+    away_manager = str(row.get("away_manager", "")).strip()
+    home_captain = str(row.get("home_captain", "")).strip()
+    away_captain = str(row.get("away_captain", "")).strip()
+    referee = get_referee(row.get("Officials", ""), row.get("Referee", ""))
 
     # ── events ────────────────────────────────────────────────────────────
     # goal scorers
-    home_scorers = players_from_event_list(row.get("home_goal_long",""))
+    home_scorers = players_from_event_list(row.get("home_goal_long", ""))
     if not home_scorers:
         # fallback to simple column "Name · minute|Name · minute"
-        home_scorers = players_from_plain(row.get("home_goal",""))
-    away_scorers = players_from_event_list(row.get("away_goal_long",""))
+        home_scorers = players_from_plain(row.get("home_goal", ""))
+    away_scorers = players_from_event_list(row.get("away_goal_long", ""))
     if not away_scorers:
-        away_scorers = players_from_plain(row.get("away_goal",""))
+        away_scorers = players_from_plain(row.get("away_goal", ""))
     all_scorers = home_scorers + away_scorers
 
     # in-match penalty goals (spot kicks during normal/extra time)
-    pen_scorers = (players_from_penalty_goal(row.get("home_penalty_goal","")) +
-                   players_from_penalty_goal(row.get("away_penalty_goal","")))
+    pen_scorers = (players_from_penalty_goal(row.get("home_penalty_goal", "")) +
+                   players_from_penalty_goal(row.get("away_penalty_goal", "")))
 
     # own goals
-    own_goals = (players_from_plain(row.get("home_own_goal","")) +
-                 players_from_plain(row.get("away_own_goal","")))
+    own_goals = (players_from_plain(row.get("home_own_goal", "")) +
+                 players_from_plain(row.get("away_own_goal", "")))
 
     # yellow cards
-    yellow = (players_from_event_list(row.get("home_yellow_card_long","")) +
-              players_from_event_list(row.get("away_yellow_card_long","")))
+    yellow = (players_from_event_list(row.get("home_yellow_card_long", "")) +
+              players_from_event_list(row.get("away_yellow_card_long", "")))
 
     # red cards (plain format: "Name · minute")
-    red = (players_from_plain(row.get("home_red_card","")) +
-           players_from_plain(row.get("away_red_card","")))
+    red = (players_from_plain(row.get("home_red_card", "")) +
+           players_from_plain(row.get("away_red_card", "")))
 
     # yellow-red (second yellow)
-    yellow_red = (players_from_plain(row.get("home_yellow_red_card","")) +
-                  players_from_plain(row.get("away_yellow_red_card","")))
+    yellow_red = (players_from_plain(row.get("home_yellow_red_card", "")) +
+                  players_from_plain(row.get("away_yellow_red_card", "")))
 
     # substitutes (players coming ON)
-    subs = (players_from_event_list(row.get("home_substitute_in_long","")) +
-            players_from_event_list(row.get("away_substitute_in_long","")))
+    subs = (players_from_event_list(row.get("home_substitute_in_long", "")) +
+            players_from_event_list(row.get("away_substitute_in_long", "")))
 
     # penalty shootout
-    so_goals = (players_from_shootout(row.get("home_penalty_shootout_goal_long","")) +
-                players_from_shootout(row.get("away_penalty_shootout_goal_long","")))
-    so_miss  = (players_from_shootout(row.get("home_penalty_shootout_miss_long","")) +
-                players_from_shootout(row.get("away_penalty_shootout_miss_long","")))
+    so_goals = (players_from_shootout(row.get("home_penalty_shootout_goal_long", "")) +
+                players_from_shootout(row.get("away_penalty_shootout_goal_long", "")))
+    so_miss = (players_from_shootout(row.get("home_penalty_shootout_miss_long", "")) +
+               players_from_shootout(row.get("away_penalty_shootout_miss_long", "")))
 
     # penalty misses during normal/extra time
-    pen_miss = (players_from_event_list(row.get("home_penalty_miss_long","")) +
-                players_from_event_list(row.get("away_penalty_miss_long","")))
+    pen_miss = (players_from_event_list(row.get("home_penalty_miss_long", "")) +
+                players_from_event_list(row.get("away_penalty_miss_long", "")))
 
     # ── flags ─────────────────────────────────────────────────────────────
-    has_penalties   = bool(so_goals or so_miss) or "penalty kicks" in notes.lower()
-    has_extra_time  = ("extra time" in notes.lower() or
-                       re.search(r"\b(9[1-9]|1[0-2]\d)\b",
-                                 str(row.get("home_goal_long","")) +
-                                 str(row.get("away_goal_long",""))) is not None)
-    has_own_goal    = bool(own_goals)
-    has_red_card    = bool(red or yellow_red)
+    has_penalties = bool(so_goals or so_miss) or "penalty kicks" in notes.lower()
+    has_extra_time = ("extra time" in notes.lower() or
+                      re.search(r"\b(9[1-9]|1[0-2]\d)\b",
+                                str(row.get("home_goal_long", "")) +
+                                str(row.get("away_goal_long", ""))) is not None)
+    has_own_goal = bool(own_goals)
+    has_red_card = bool(red or yellow_red)
     has_penalty_miss = bool(pen_miss or so_miss)
 
     # ── build full text ───────────────────────────────────────────────────
     def nv(s):
         """Return s if not nan/empty, else ''."""
-        return s if s and s.lower() not in ("nan","none") else ""
+        return s if s and s.lower() not in ("nan", "none") else ""
 
     parts = []
     parts.append(f"{home_team} vs {away_team}")
@@ -231,7 +231,7 @@ def build_document(row: dict, doc_id: int) -> dict:
     if nv(round_): parts.append(f"Round {round_} Stage {round_}")
     if nv(venue):  parts.append(f"Venue {venue}")
     if nv(score):  parts.append(f"Score {score} {home_score} {away_score}")
-    if nv(referee):parts.append(f"Referee {referee}")
+    if nv(referee): parts.append(f"Referee {referee}")
     if nv(notes):  parts.append(notes)
 
     if nv(home_manager): parts.append(f"Manager {home_manager} Coach {home_manager}")
@@ -261,29 +261,29 @@ def build_document(row: dict, doc_id: int) -> dict:
     # ── assemble ──────────────────────────────────────────────────────────
     return {
         "doc_id": doc_id,
-        "text":   text,
+        "text": text,
         "fields": {
-            "home_team":    home_team,
-            "away_team":    away_team,
-            "stage":        round_,
-            "venue":        venue,
-            "score":        score,
-            "referee":      referee,
-            "date":         date,
-            "year":         year,
-            "host":         host,
+            "home_team": home_team,
+            "away_team": away_team,
+            "stage": round_,
+            "venue": venue,
+            "score": score,
+            "referee": referee,
+            "date": date,
+            "year": year,
+            "host": host,
             "home_manager": home_manager,
             "away_manager": away_manager,
             "home_captain": home_captain,
             "away_captain": away_captain,
             "goal_scorers": all_scorers,
             "yellow_cards": yellow,
-            "red_cards":    red + yellow_red,
-            "substitutes":  subs,
-            "has_penalties":    has_penalties,
-            "has_extra_time":   has_extra_time,
-            "has_own_goal":     has_own_goal,
-            "has_red_card":     has_red_card,
+            "red_cards": red + yellow_red,
+            "substitutes": subs,
+            "has_penalties": has_penalties,
+            "has_extra_time": has_extra_time,
+            "has_own_goal": has_own_goal,
+            "has_red_card": has_red_card,
             "has_penalty_miss": has_penalty_miss,
         },
         "raw": {k: str(v) for k, v in row.items()},
@@ -362,10 +362,10 @@ if __name__ == "__main__":
 
     # [6] coverage stats
     has_goals = sum(1 for d in docs if d["fields"]["goal_scorers"])
-    has_pen   = sum(1 for d in docs if d["fields"]["has_penalties"])
-    has_et    = sum(1 for d in docs if d["fields"]["has_extra_time"])
-    has_red   = sum(1 for d in docs if d["fields"]["has_red_card"])
-    has_subs  = sum(1 for d in docs if d["fields"]["substitutes"])
+    has_pen = sum(1 for d in docs if d["fields"]["has_penalties"])
+    has_et = sum(1 for d in docs if d["fields"]["has_extra_time"])
+    has_red = sum(1 for d in docs if d["fields"]["has_red_card"])
+    has_subs = sum(1 for d in docs if d["fields"]["substitutes"])
     print(f"\n[6] Coverage across all {len(docs)} documents:")
     print(f"    goal scorers parsed : {has_goals}")
     print(f"    penalty shootouts   : {has_pen}")
