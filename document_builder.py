@@ -1,20 +1,3 @@
-"""
-document_builder.py  —  Part 1
-================================
-Reads the World Cup 1930-2022 CSV and builds one text document per match.
-
-HOW TO RUN:
-    python document_builder.py
-    (uses the default CSV path hardcoded below)
-
-HOW TO VERIFY (checklist printed at the end):
-    [1] 964 documents built
-    [2] doc_id=1 is Argentina vs France Final, has_penalties=True
-    [3] Goal scorers parsed correctly (Messi, Di María, Mbappé visible)
-    [4] Yellow cards parsed correctly
-    [5] Red cards parsed correctly
-    [6] data/documents.json exists and is non-empty
-"""
 
 import csv
 import re
@@ -24,21 +7,12 @@ import os
 CSV_PATH = r"C:\Users\ASUS\Downloads\matches_1930_2022.csv"
 
 
-# ═══════════════════════════════════════════════════════════════
+
 #  LOW-LEVEL PARSERS
-# ═══════════════════════════════════════════════════════════════
+
 
 def parse_event_list(cell: str) -> list[str]:
-    """
-    The goal/card/sub columns store data as a Python-like list string:
-        "['36&rsquor;|2:0|Ángel Di María|Assist:|Mac Allister', '108&rsquor;|3:2|Lionel Messi']"
 
-    We CANNOT use ast.literal_eval because after replacing &rsquor; → '
-    the apostrophes break Python string parsing.
-
-    Strategy: strip outer brackets, then split on  ', '  boundary,
-    then clean each entry individually.
-    """
     raw = str(cell).strip()
     if raw.lower() in ("nan", "none", ""):
         return []
@@ -63,25 +37,18 @@ def parse_event_list(cell: str) -> list[str]:
 
 
 def player_from_event(event: str) -> str:
-    """
-    Each event string:  "36'|2:0|Ángel Di María|Assist:|Mac Allister"
-    Player name is always at pipe-index 2.
-    """
+
     parts = event.split("|")
     return parts[2].strip() if len(parts) >= 3 else ""
 
 
 def players_from_event_list(cell: str) -> list[str]:
-    """Parse an event-list column and return player names."""
+
     return [n for n in (player_from_event(e) for e in parse_event_list(cell)) if n]
 
 
 def players_from_plain(cell: str) -> list[str]:
-    """
-    Red-card and yellow-red-card columns use a simpler format:
-        "Paulo Bento · 90+11"   or   "Player1 · 45|Player2 · 78"
-    Returns list of names.
-    """
+
     raw = str(cell).strip()
     if raw.lower() in ("nan", "none", ""):
         return []
@@ -94,9 +61,7 @@ def players_from_plain(cell: str) -> list[str]:
 
 
 def players_from_penalty_goal(cell: str) -> list[str]:
-    """
-    home_penalty_goal column:  "Lionel Messi (P) · 23|Kylian Mbappé (P) · 80"
-    """
+
     raw = str(cell).strip()
     if raw.lower() in ("nan", "none", ""):
         return []
@@ -110,10 +75,7 @@ def players_from_penalty_goal(cell: str) -> list[str]:
 
 
 def players_from_shootout(cell: str) -> list[str]:
-    """
-    Penalty-shootout columns use pipe-index 2, but no apostrophe:
-        "2|1:1|Lionel Messi"
-    """
+
     raw = str(cell).strip()
     if raw.lower() in ("nan", "none", ""):
         return []
@@ -139,9 +101,8 @@ def get_referee(officials: str, referee: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-# ═══════════════════════════════════════════════════════════════
 #  DOCUMENT BUILDER
-# ═══════════════════════════════════════════════════════════════
+
 
 def build_document(row: dict, doc_id: int) -> dict:
     """Convert one CSV row into a searchable document."""
@@ -164,7 +125,8 @@ def build_document(row: dict, doc_id: int) -> dict:
     away_captain = str(row.get("away_captain", "")).strip()
     referee = get_referee(row.get("Officials", ""), row.get("Referee", ""))
 
-    # ── events ────────────────────────────────────────────────────────────
+
+    # ── events
     # goal scorers
     home_scorers = players_from_event_list(row.get("home_goal_long", ""))
     if not home_scorers:
@@ -209,7 +171,7 @@ def build_document(row: dict, doc_id: int) -> dict:
     pen_miss = (players_from_event_list(row.get("home_penalty_miss_long", "")) +
                 players_from_event_list(row.get("away_penalty_miss_long", "")))
 
-    # ── flags ─────────────────────────────────────────────────────────────
+    # flags
     has_penalties = bool(so_goals or so_miss) or "penalty kicks" in notes.lower()
     has_extra_time = ("extra time" in notes.lower() or
                       re.search(r"\b(9[1-9]|1[0-2]\d)\b",
@@ -219,7 +181,7 @@ def build_document(row: dict, doc_id: int) -> dict:
     has_red_card = bool(red or yellow_red)
     has_penalty_miss = bool(pen_miss or so_miss)
 
-    # ── build full text ───────────────────────────────────────────────────
+    # build full text
     def nv(s):
         """Return s if not nan/empty, else ''."""
         return s if s and s.lower() not in ("nan", "none") else ""
@@ -258,7 +220,7 @@ def build_document(row: dict, doc_id: int) -> dict:
 
     text = ". ".join(filter(None, parts))
 
-    # ── assemble ──────────────────────────────────────────────────────────
+    #  assemble
     return {
         "doc_id": doc_id,
         "text": text,
@@ -313,9 +275,8 @@ def load_documents(path: str) -> list[dict]:
     return docs
 
 
-# ═══════════════════════════════════════════════════════════════
 #  MAIN — run to build + verify
-# ═══════════════════════════════════════════════════════════════
+
 if __name__ == "__main__":
     docs = build_all_documents(CSV_PATH)
     save_documents(docs, "data/documents.json")

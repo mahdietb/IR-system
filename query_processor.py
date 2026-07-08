@@ -1,26 +1,4 @@
-"""
-query_processor.py
-===================
-بخش ۴ + ۵ پروژه: پردازش پرس‌وجو و رتبه‌بندی
 
-سه نوع پرس‌وجو پشتیبانی می‌شود:
-1. Keyword  : "messi final"         -> اسناد دارای هر دو کلمه
-2. Boolean  : "mbappe AND goal"     -> عملگرهای AND/OR/NOT
-3. Ranked   : TF-IDF score برای هر سند
-4. Fielded  : "team:Argentina"      -> جستجو در فیلد خاص
-
-TF-IDF چیست؟
------------
-TF  (Term Frequency)  : این کلمه چند بار در این سند آمده؟
-                        هرچه بیشتر -> سند مرتبط‌تر است.
-IDF (Inverse Document Frequency): این کلمه در چند سند کل آمده؟
-                        هرچه نادرتر -> مهم‌تر است.
-
-مثال: "goal" در ۶۰ از ۶۴ مسابقه -> IDF کم (کلمه رایج)
-      "messi" در ۳ از ۶۴ مسابقه -> IDF بالا (کلمه خاص)
-
-امتیاز نهایی = TF × IDF
-"""
 
 import math
 import re
@@ -29,8 +7,108 @@ from inverted_index import InvertedIndex
 from preprocessor import preprocess, preprocess_query
 
 
+# ============================================================
+# Levenshtein Edit Distance
+# ============================================================
+
+def levenshtein_distance(s1: str, s2: str) -> int:
+
+    n, m = len(s1), len(s2)
+
+
+    if n == 0:
+        return m
+    if m == 0:
+        return n
+
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+
+    for i in range(n + 1):
+        dp[i][0] = i
+    for j in range(m + 1):
+        dp[0][j] = j
+
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if s1[i - 1] == s2[j - 1]:
+
+                dp[i][j] = dp[i - 1][j - 1]
+            else:
+                dp[i][j] = 1 + min(
+                    dp[i - 1][j],
+                    dp[i][j - 1],
+                    dp[i - 1][j - 1]
+                )
+
+    return dp[n][m]
+
+
+def find_spelling_suggestions(
+    term: str,
+    index: InvertedIndex,
+    max_distance: int = 2,
+    max_suggestions: int = 5
+) -> list[tuple[str, int]]:
+
+    term_len = len(term)
+    suggestions = []
+
+    all_terms = list(index.index.keys())
+
+    for candidate in all_terms:
+        cand_len = len(candidate)
+
+        if abs(cand_len - term_len) > max_distance:
+            continue
+
+        dist = levenshtein_distance(term, candidate)
+        if dist <= max_distance and dist > 0:
+            suggestions.append((candidate, dist))
+
+    suggestions.sort(key=lambda x: (x[1], -index.index[x[0]].df))
+
+    return suggestions[:max_suggestions]
+
+
+# SpellingCorrector
+
+
+class SpellingCorrector:
+
+
+    def __init__(self, index: InvertedIndex, max_distance: int = 2):
+        self.index = index
+        self.max_distance = max_distance
+
+    def suggest(self, term: str, max_suggestions: int = 5) -> list[tuple[str, int]]:
+
+        term = term.lower().strip()
+
+        if self.index.lookup(term) is not None:
+            return []
+
+        return find_spelling_suggestions(
+            term, self.index,
+            max_distance=self.max_distance,
+            max_suggestions=max_suggestions
+        )
+
+    def check_query_tokens(self, tokens: list[str]) -> dict[str, list[tuple[str, int]]]:
+
+        corrections = {}
+        for token in tokens:
+            suggestions = self.suggest(token)
+            if suggestions:
+                corrections[token] = suggestions
+        return corrections
+
+
+
+# QueryResult
+
+
 class QueryResult:
-    """نتیجه یک پرس‌وجو."""
+
 
     def __init__(self, doc_id: int, score: float, metadata: dict):
         self.doc_id = doc_id
@@ -44,65 +122,135 @@ class QueryResult:
         return f"[DocID:{self.doc_id}] {home} vs {away} | {stage} | score={self.score:.4f}"
 
 
-class QueryProcessor:
-    """
-    پردازنده پرس‌وجو.
 
-    از یک InvertedIndex استفاده می‌کند و پرس‌وجوها را پردازش می‌کند.
-    """
+# QueryProcessor
+
+
+class QueryProcessor:
 
     def __init__(self, index: InvertedIndex):
         self.index = index
+        self.corrector = SpellingCorrector(index, max_distance=2)
 
-    # ============================================================
-    # ۱) جستجوی Keyword ساده
-    # ============================================================
+
+    # Wildcard Search
+
+
+    def _expand_wildcards(self, tokens: list[str]) -> tuple[list[str], dict[str, list[str]]]:
+
+        expanded = []
+        wildcard_map = {}
+
+        for token in tokens:
+            if "*" in token:
+                # بررسی که * فقط در انتها است
+                if not token.endswith("*") or token.count("*") > 1:
+                    # wildcard پیچیده -> نادیده بگیر
+                    expanded.append(token.replace("*", ""))
+                    continue
+
+                prefix = token[:-1].lower()  # حذف *
+                if not prefix:
+
+                    continue
+
+                matched = [
+                    term for term in self.index.index.keys()
+                    if term.startswith(prefix)
+                ]
+
+                wildcard_map[token] = matched
+
+                if matched:
+                    expanded.extend(matched)
+                else:
+
+                    expanded.append(prefix)
+            else:
+                expanded.append(token)
+
+        return expanded, wildcard_map
+
+    def wildcard_search(self, query: str, top_k: int = 10) -> tuple[list[QueryResult], dict]:
+
+        tokens = preprocess(query.replace("*", "WILDCARD_MARKER*"), keep_stop_words=False)
+
+
+        raw_tokens = query.lower().split()
+        wildcard_tokens = [t for t in raw_tokens if "*" in t]
+        normal_query_parts = [t for t in raw_tokens if "*" not in t]
+
+
+        normal_tokens = preprocess(" ".join(normal_query_parts), keep_stop_words=False)
+
+
+        wildcard_map = {}
+        expanded_from_wildcards = []
+
+        for wt in wildcard_tokens:
+            if not wt.endswith("*") or wt.count("*") > 1:
+
+                prefix = wt.replace("*", "")
+                matched = [term for term in self.index.index.keys() if term.startswith(prefix)]
+            else:
+                prefix = wt[:-1]
+                matched = [term for term in self.index.index.keys() if term.startswith(prefix)]
+
+            wildcard_map[wt] = matched
+            expanded_from_wildcards.extend(matched)
+
+        all_tokens = normal_tokens + expanded_from_wildcards
+
+        if not all_tokens:
+            return [], wildcard_map
+
+
+        candidate_docs = set()
+        for token in all_tokens:
+            candidate_docs.update(self.index.get_doc_ids_for_term(token))
+
+
+        scored = self._score_documents(candidate_docs, all_tokens)
+        return self._top_k(scored, top_k), wildcard_map
+
+
+    # Spelling Correction
+
+
+    def get_spelling_suggestions(self, query: str) -> dict[str, list[tuple[str, int]]]:
+
+
+        if "*" in query:
+            return {}
+
+        tokens = preprocess(query, keep_stop_words=False)
+        return self.corrector.check_query_tokens(tokens)
+
 
     def keyword_search(self, query: str, top_k: int = 10) -> list[QueryResult]:
-        """
-        جستجوی ساده کلمات کلیدی.
-        اسنادی برمی‌گرداند که حداقل یکی از کلمات پرس‌وجو را دارند.
-        نتایج بر اساس TF-IDF رتبه‌بندی می‌شوند.
 
-        مثال: "messi final" -> اسناد دارای "messi" یا "final"
-        """
         tokens = preprocess(query, keep_stop_words=False)
         if not tokens:
             return []
 
-        # پیدا کردن همه اسناد مرتبط
+
         candidate_docs = set()
         for token in tokens:
             candidate_docs.update(self.index.get_doc_ids_for_term(token))
 
-        # محاسبه امتیاز TF-IDF برای هر سند
+
         scored = self._score_documents(candidate_docs, tokens)
         return self._top_k(scored, top_k)
 
-    # ============================================================
-    # ۲) جستجوی Boolean
-    # ============================================================
+
 
     def boolean_search(self, query: str) -> list[QueryResult]:
-        """
-        جستجوی Boolean با عملگرهای AND، OR، NOT.
 
-        مثال‌ها:
-            "mbappe AND goal"
-            "penalty OR extra time"
-            "argentina NOT brazil"
-            "messi AND (final OR semifinal)"
-
-        نتایج Boolean ترتیب ندارند (همه یکسان‌اند)،
-        ولی ما TF-IDF هم اضافه می‌کنیم.
-        """
         result_ids = self._parse_boolean_query(query)
 
-        # اگر نتیجه‌ای نبود
         if not result_ids:
             return []
 
-        # توکن‌های پرس‌وجو برای محاسبه امتیاز
         clean_query = re.sub(r"\b(AND|OR|NOT)\b", " ", query, flags=re.IGNORECASE)
         tokens = preprocess(clean_query, keep_stop_words=False)
 
@@ -110,17 +258,9 @@ class QueryProcessor:
         return self._top_k(scored, top_k=len(result_ids))
 
     def _parse_boolean_query(self, query: str) -> set[int]:
-        """
-        پارسر ساده برای پرس‌وجوی Boolean.
-        اولویت: NOT > AND > OR
-        """
-        # تبدیل به uppercase برای تشخیص عملگرها
-        # اما کلمات جستجو را lowercase می‌کنیم
 
-        # پشتیبانی از پرانتز با تقسیم
         query = query.strip()
 
-        # ابتدا OR را پردازش می‌کنیم (پایین‌ترین اولویت)
         if re.search(r"\bOR\b", query, re.IGNORECASE):
             parts = re.split(r"\bOR\b", query, flags=re.IGNORECASE)
             result = set()
@@ -129,7 +269,7 @@ class QueryProcessor:
                 result = result.union(part_result)
             return result
 
-        # سپس AND را پردازش می‌کنیم
+
         if re.search(r"\bAND\b", query, re.IGNORECASE):
             parts = re.split(r"\bAND\b", query, flags=re.IGNORECASE)
             result = None
@@ -141,21 +281,19 @@ class QueryProcessor:
                     result = result.intersection(part_result)
             return result or set()
 
-        # سپس NOT را پردازش می‌کنیم
         if re.match(r"^NOT\s+", query, re.IGNORECASE):
             rest = re.sub(r"^NOT\s+", "", query, flags=re.IGNORECASE)
             not_docs = self._parse_boolean_query(rest.strip())
             all_docs = self.index.get_all_doc_ids()
             return all_docs - not_docs
 
-        # اگر هیچ عملگری نبود، keyword ساده
+
         query_clean = query.strip("() ")
         tokens = preprocess(query_clean, keep_stop_words=False)
 
         if not tokens:
             return set()
 
-        # AND ضمنی: همه کلمات باید در سند باشند
         result = None
         for token in tokens:
             doc_ids = set(self.index.get_doc_ids_for_term(token))
@@ -166,38 +304,27 @@ class QueryProcessor:
 
         return result or set()
 
-    # ============================================================
-    # ۳) جستجوی فیلدی
-    # ============================================================
+
 
     def fielded_search(self, query: str, top_k: int = 10) -> list[QueryResult]:
-        """
-        جستجو در فیلدهای خاص.
 
-        فرمت‌های پشتیبانی‌شده:
-            team:Argentina          -> home یا away
-            home_team:Argentina     -> فقط تیم خانگی
-            stage:Final             -> مرحله
-            referee:Marciniak       -> داور
-            round:Quarter-finals    -> (مترادف stage)
-
-        مثال مرکب: "team:Argentina stage:Final"
-        """
-        # استخراج filter های فیلدی
         field_filters = {}
         remaining_query = query
 
-        # پیدا کردن الگوهای field:value
         field_pattern = re.compile(
-            r"(\w+):([\"']([^\"']+)[\"']|(\S+))",
+            r"(\w+):[\"']([^\"']+)[\"']|(\w+):(\S+)",
             re.IGNORECASE
         )
 
         for match in field_pattern.finditer(query):
-            field = match.group(1).lower()
-            value = (match.group(3) or match.group(4) or "").strip()
+            if match.group(1):
+                field = match.group(1).lower()
+                value = match.group(2).strip()
+            else:
+                field = match.group(3).lower()
+                value = match.group(4).strip()
 
-            # نرمال‌سازی نام فیلدها
+
             if field == "team":
                 field_filters["team"] = value
             elif field in ("round", "stage"):
@@ -212,10 +339,9 @@ class QueryProcessor:
             remaining_query = remaining_query.replace(match.group(0), "").strip()
 
         if not field_filters:
-            # هیچ فیلتر فیلدی نبود، جستجوی عادی
             return self.keyword_search(query, top_k)
 
-        # اعمال filter های فیلدی
+
         candidate_docs = None
 
         for field, value in field_filters.items():
@@ -226,14 +352,12 @@ class QueryProcessor:
             field_docs = None
             for token in value_tokens:
                 if field == "team":
-                    # جستجو در هر دو تیم
                     home_pl = self.index.lookup_field("home_team", token)
                     away_pl = self.index.lookup_field("away_team", token)
                     home_ids = set(home_pl.get_doc_ids()) if home_pl else set()
                     away_ids = set(away_pl.get_doc_ids()) if away_pl else set()
                     token_docs = home_ids.union(away_ids)
                 elif field == "player":
-                    # جستجو در goal scorers
                     pl = self.index.lookup_field("goal_scorers", token)
                     token_docs = set(pl.get_doc_ids()) if pl else set()
                 else:
@@ -256,11 +380,9 @@ class QueryProcessor:
         if candidate_docs is None:
             candidate_docs = self.index.get_all_doc_ids()
 
-        # اگر query اضافی هم بود، رتبه‌بندی با آن
         tokens = preprocess(remaining_query) if remaining_query else []
 
         if tokens:
-            # فقط اسناد field-filtered که keyword هم دارند
             keyword_docs = set()
             for token in tokens:
                 keyword_docs.update(self.index.get_doc_ids_for_term(token))
@@ -271,7 +393,6 @@ class QueryProcessor:
 
         scored = self._score_documents(candidate_docs, tokens if tokens else [])
 
-        # اگر توکنی نبود، امتیاز یکسان بده
         if not tokens:
             results = []
             for doc_id in sorted(candidate_docs):
@@ -281,77 +402,62 @@ class QueryProcessor:
 
         return self._top_k(scored, top_k)
 
-    # ============================================================
-    # ۴) جستجوی هوشمند (تشخیص نوع خودکار)
-    # ============================================================
 
-    def search(self, query: str, top_k: int = 10) -> list[QueryResult]:
-        """
-        تابع اصلی جستجو.
-        نوع پرس‌وجو را تشخیص می‌دهد و مناسب‌ترین روش را اجرا می‌کند.
 
-        - اگر دارای AND/OR/NOT بود -> Boolean
-        - اگر دارای field:value بود -> Fielded
-        - وگرنه -> Keyword + TF-IDF
-        """
+    def search(
+        self,
+        query: str,
+        top_k: int = 10
+    ) -> tuple[list[QueryResult], dict]:
+
         query = query.strip()
+        info = {}
 
-        # تشخیص نوع
+        #  Wildcard
+        if "*" in query:
+            results, wc_map = self.wildcard_search(query, top_k)
+            info["wildcard_map"] = wc_map
+            return results, info
+
+
         has_boolean = bool(re.search(r"\b(AND|OR|NOT)\b", query, re.IGNORECASE))
         has_field = bool(re.search(r"\w+:[\"']?[^\s]", query))
 
         if has_field:
-            return self.fielded_search(query, top_k)
+            results = self.fielded_search(query, top_k)
         elif has_boolean:
             results = self.boolean_search(query)
-            return results[:top_k]
+            results = results[:top_k]
         else:
-            return self.keyword_search(query, top_k)
+            results = self.keyword_search(query, top_k)
 
-    # ============================================================
+
+        if len(results) < 3:
+            suggestions = self.get_spelling_suggestions(query)
+            if suggestions:
+                info["spelling"] = suggestions
+
+        return results, info
+
+
     # محاسبه TF-IDF
-    # ============================================================
+
 
     def _compute_tf(self, tf_raw: int, doc_length: int) -> float:
-        """
-        TF نرمال‌شده.
 
-        فرمول: log(1 + tf)
-        چرا log؟ چون اگر messi 5 بار در سندی باشد،
-        نه 5 برابر بلکه کمی بیشتر از 1 بار اهمیت دارد.
-        """
         if tf_raw == 0:
             return 0.0
         return 1 + math.log10(tf_raw)
 
     def _compute_idf(self, df: int) -> float:
-        """
-        IDF: Inverse Document Frequency.
 
-        فرمول: log(N / df)
-
-        N  = تعداد کل اسناد
-        df = تعداد اسنادی که این term دارند
-
-        مثال:
-        - "goals" در ۶۰ از ۶۴ سند: idf = log(64/60) ≈ 0.028 (کم)
-        - "messi" در ۳ از ۶۴ سند:  idf = log(64/3)  ≈ 1.33  (زیاد)
-
-        چرا این term های نادر مهم‌ترند؟
-        چون اگر کاربر "messi" جستجو کند، می‌خواهد بازی‌های مسی را ببیند،
-        نه همه بازی‌هایی که کلمه "goals" دارند.
-        """
         N = self.index.doc_count
         if df == 0 or N == 0:
             return 0.0
         return math.log10(N / df)
 
     def _score_documents(self, doc_ids: set[int], tokens: list[str]) -> list[QueryResult]:
-        """
-        TF-IDF امتیاز هر سند را محاسبه می‌کند.
 
-        امتیاز نهایی = مجموع (TF × IDF) برای همه کلمات پرس‌وجو
-        """
         scores = defaultdict(float)
 
         for token in tokens:
@@ -361,7 +467,6 @@ class QueryProcessor:
 
             idf = self._compute_idf(pl.df)
 
-            # فقط اسناد candidate
             for posting in pl.postings:
                 if posting.doc_id not in doc_ids:
                     continue
@@ -370,12 +475,11 @@ class QueryProcessor:
                 tf = self._compute_tf(posting.tf, doc_len)
                 scores[posting.doc_id] += tf * idf
 
-        # اگر اسنادی candidate بودند اما توکن نداشتند، امتیاز ۰
+
         for doc_id in doc_ids:
             if doc_id not in scores:
                 scores[doc_id] = 0.0
 
-        # ساخت QueryResult
         results = []
         for doc_id, score in scores.items():
             meta = self.index.get_doc_info(doc_id)
@@ -388,6 +492,9 @@ class QueryProcessor:
         results.sort(key=lambda r: -r.score)
         return results[:top_k]
 
+
+
+# Display helpers
 
 def print_results(results: list[QueryResult], query: str):
     """نتایج را به شکل خوانا چاپ می‌کند."""
@@ -406,9 +513,7 @@ def print_results(results: list[QueryResult], query: str):
         print(f"  Rank {i:2d} | DocID: {r.doc_id:3d} | {home} vs {away} | {stage} | Score: {r.score:.4f}")
 
 
-# ==========================================
-# اجرای مستقیم برای تست
-# ==========================================
+
 if __name__ == "__main__":
     import json, os, sys
 
@@ -416,7 +521,7 @@ if __name__ == "__main__":
     from document_builder import build_all_documents
     from preprocessor import preprocess_documents
 
-    # ---- بارگذاری داده ----
+
     if os.path.exists("data/index.json"):
         idx = InvertedIndex()
         idx.load("data/index.json")
@@ -434,20 +539,24 @@ if __name__ == "__main__":
 
     qp = QueryProcessor(idx)
 
-    # ---- تست با پرس‌وجوهای مختلف ----
-    test_queries = [
-        "messi",
-        "mbappe",
-        "penalty",
-        "final",
-        "messi final",
-        "mbappe AND goal",
-        "penalty AND quarter",
-        "argentina NOT france",
-        "team:Argentina",
-        "team:Argentina stage:Final",
-    ]
 
-    for q in test_queries:
-        results = qp.search(q, top_k=5)
+    print("\n=== تست Wildcard ===")
+    wildcard_tests = ["mess*", "mba*", "pen*", "arg*"]
+    for q in wildcard_tests:
+        results, info = qp.search(q, top_k=5)
+        wc_map = info.get("wildcard_map", {})
+        for pattern, matched in wc_map.items():
+            print(f"  {pattern} -> matched terms: {matched[:10]}")
+        print_results(results, q)
+
+    print("\n=== تست Spelling Correction ===")
+    spelling_tests = ["messy", "mbape", "penalti", "argentna"]
+    for q in spelling_tests:
+        suggestions = qp.get_spelling_suggestions(q)
+        if suggestions:
+            for token, suggs in suggestions.items():
+                best = suggs[0] if suggs else None
+                if best:
+                    print(f"  Did you mean '{best[0]}' instead of '{token}'? (distance={best[1]})")
+        results, info = qp.search(q, top_k=3)
         print_results(results, q)

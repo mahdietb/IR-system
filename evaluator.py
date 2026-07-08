@@ -1,37 +1,3 @@
-"""
-evaluator.py  —  Part 6
-========================
-Evaluates the IR system using standard metrics.
-
-METRICS EXPLAINED
------------------
-Precision@K  : Of the top-K results returned, what fraction are relevant?
-               e.g. P@5=0.8 means 4 of 5 top results were correct matches.
-
-Recall@K     : Of ALL relevant documents that exist, what fraction did we
-               find in the top K?
-               e.g. R@10=0.6 means we found 6 of 10 relevant matches.
-
-Average Precision (AP)
-               Precision measured each time a relevant doc is found,
-               then averaged. Rewards systems that rank relevant docs high.
-
-MAP          : Mean AP across all queries. The main headline number.
-               MAP=1.0 is perfect. MAP=0.0 is useless.
-
-MRR          : Mean Reciprocal Rank. 1/rank_of_first_relevant_doc, averaged.
-               Tells you how quickly the user finds their first answer.
-
-HOW TO VERIFY:
-    python evaluator.py
-    -> Prints per-query breakdown and final MAP/MRR/P@5/P@10/R@10.
-    -> data/eval_results.json is created.
-    -> Check that MAP > 0.5 on the sample queries below.
-       (It will be high because these are well-chosen queries.)
-    -> For your real submission you must add your own relevance judgments
-       for queries you design — see the instructions at the bottom of this file.
-"""
-
 import json
 import os
 import sys
@@ -42,24 +8,13 @@ from inverted_index  import InvertedIndex
 from query_processor import QueryProcessor
 
 
-# ═══════════════════════════════════════════════════════════════
-#  RELEVANCE JUDGMENTS
-#  (built from the candidate results printed above)
-#
-#  Each entry: (query_id, query_text, [relevant_doc_ids])
-#
-#  HOW WE DECIDED RELEVANCE:
-#  For each query we ran the system and looked at the top-10 results.
-#  A document is marked relevant if a human judge would say
-#  "yes, this match is a correct answer to this query."
-# ═══════════════════════════════════════════════════════════════
 
 EVAL_TOPICS = [
     # Q01: matches where Messi played in a Final
-    # doc=1  Argentina vs France, Final 2022      ✓ (Messi scored, Final)
-    # doc=65 France vs Croatia, Final 2018        ✗ (no Messi)
-    # doc=129 Germany vs Argentina, Final 2014    ✓ (Messi played)
-    # doc=257 Italy vs France, Final 2006         ✗ (no Messi)
+    # doc=1  Argentina vs France, Final 2022       (Messi scored, Final)
+    # doc=65 France vs Croatia, Final 2018         (no Messi)
+    # doc=129 Germany vs Argentina, Final 2014     (Messi played)
+    # doc=257 Italy vs France, Final 2006          (no Messi)
     {
         "id": "Q01",
         "query": "messi final",
@@ -67,12 +22,7 @@ EVAL_TOPICS = [
         "notes": "All World Cup Finals involving Argentina (Messi was captain/player)"
     },
 
-    # Q02: matches where Mbappé scored goals
-    # doc=1  Final 2022: Mbappé hat-trick          ✓
-    # doc=13 France vs Poland R16 2022: Mbappé 2G  ✓
-    # doc=79 France vs Argentina R16 2018: Mbappé  ✓
-    # doc=65 France vs Croatia Final 2018: Mbappé  ✓
-    # doc=43 France vs Denmark GS 2022: Mbappé     ✓
+
     {
         "id": "Q02",
         "query": "mbappe goal",
@@ -80,8 +30,7 @@ EVAL_TOPICS = [
         "notes": "All matches where Mbappé scored (all France 2018/2022 matches)"
     },
 
-    # Q03: matches decided by penalty shootout
-    # All doc_ids returned have has_penalties=True — all relevant
+
     {
         "id": "Q03",
         "query": "penalty shootout",
@@ -90,7 +39,7 @@ EVAL_TOPICS = [
         "notes": "All matches decided on penalties (35 total in dataset)"
     },
 
-    # Q04: matches containing an own goal
+
     {
         "id": "Q04",
         "query": "own goal",
@@ -98,7 +47,7 @@ EVAL_TOPICS = [
         "notes": "Matches with confirmed own goals"
     },
 
-    # Q05: matches with a goal scored in extra time
+
     {
         "id": "Q05",
         "query": "extra time goal",
@@ -106,7 +55,7 @@ EVAL_TOPICS = [
         "notes": "Matches where a goal was scored after minute 90"
     },
 
-    # Q06: Argentina matches with yellow cards
+
     {
         "id": "Q06",
         "query": "yellow cards argentina",
@@ -114,7 +63,7 @@ EVAL_TOPICS = [
         "notes": "Argentina matches where yellow cards were recorded"
     },
 
-    # Q07: matches refereed by Szymon Marciniak
+
     {
         "id": "Q07",
         "query": "referee marciniak",
@@ -122,7 +71,7 @@ EVAL_TOPICS = [
         "notes": "Exact match on referee name — 5 matches"
     },
 
-    # Q08: matches where Modrić was captain
+
     {
         "id": "Q08",
         "query": "captain modric",
@@ -130,7 +79,7 @@ EVAL_TOPICS = [
         "notes": "All Croatia 2018/2022 matches (Modrić was captain)"
     },
 
-    # Q09: Brazil Quarter-final matches
+
     {
         "id": "Q09",
         "query": "team:Brazil stage:Quarter-finals",
@@ -138,7 +87,7 @@ EVAL_TOPICS = [
         "notes": "Exact field filter — all Brazil quarter-final appearances"
     },
 
-    # Q10: matches with a red card
+
     {
         "id": "Q10",
         "query": "red card",
@@ -146,7 +95,7 @@ EVAL_TOPICS = [
         "notes": "Matches where at least one player was sent off"
     },
 
-    # Q11: matches with a missed penalty (shootout or in-play)
+
     {
         "id": "Q11",
         "query": "penalty miss",
@@ -165,17 +114,12 @@ EVAL_TOPICS = [
 ]
 
 
-# ═══════════════════════════════════════════════════════════════
+
 #  METRIC FUNCTIONS
-# ═══════════════════════════════════════════════════════════════
+
 
 def precision_at_k(retrieved: list[int], relevant: set[int], k: int) -> float:
-    """
-    Precision@K = (# relevant in top-K) / K
 
-    Example: top-5 = [1,2,3,4,5], relevant={1,3,5}
-             P@5 = 3/5 = 0.6
-    """
     if k == 0:
         return 0.0
     hits = sum(1 for d in retrieved[:k] if d in relevant)
@@ -183,12 +127,7 @@ def precision_at_k(retrieved: list[int], relevant: set[int], k: int) -> float:
 
 
 def recall_at_k(retrieved: list[int], relevant: set[int], k: int) -> float:
-    """
-    Recall@K = (# relevant in top-K) / (total # relevant)
 
-    Example: relevant={1,3,5,7,9} (5 docs), top-10 found {1,3,5}
-             R@10 = 3/5 = 0.6
-    """
     if not relevant:
         return 0.0
     hits = sum(1 for d in retrieved[:k] if d in relevant)
@@ -196,15 +135,7 @@ def recall_at_k(retrieved: list[int], relevant: set[int], k: int) -> float:
 
 
 def average_precision(retrieved: list[int], relevant: set[int]) -> float:
-    """
-    AP = average of precision values at each rank where a relevant doc appears.
 
-    Example: relevant found at ranks 1, 3, 5 out of 5 total relevant:
-             P@1=1.0, P@3=2/3, P@5=3/5
-             AP = (1.0 + 0.667 + 0.6) / 5 = 0.453
-
-    Note: we divide by |relevant|, not by number found — penalises missing docs.
-    """
     if not relevant:
         return 0.0
     num_found = 0
@@ -217,28 +148,22 @@ def average_precision(retrieved: list[int], relevant: set[int]) -> float:
 
 
 def reciprocal_rank(retrieved: list[int], relevant: set[int]) -> float:
-    """
-    RR = 1 / (rank of first relevant document).
-    If no relevant doc found, RR = 0.
-    """
+
     for rank, doc_id in enumerate(retrieved, 1):
         if doc_id in relevant:
             return 1.0 / rank
     return 0.0
 
 
-# ═══════════════════════════════════════════════════════════════
 #  EVALUATOR
-# ═══════════════════════════════════════════════════════════════
+
 
 class Evaluator:
     def __init__(self, qp: QueryProcessor):
         self.qp = qp
 
     def run(self, topics: list[dict], top_k: int = 10) -> dict:
-        """
-        Run all queries, compute metrics, print and return summary.
-        """
+
         print(f"\n{'='*68}")
         print(f"  EVALUATION RESULTS  ({len(topics)} queries, top_k={top_k})")
         print(f"{'='*68}")
@@ -251,7 +176,7 @@ class Evaluator:
             query    = t["query"]
             relevant = set(t["relevant_ids"])
 
-            results       = self.qp.search(query, top_k=top_k)
+            results, _info = self.qp.search(query, top_k=top_k)
             retrieved_ids = [r.doc_id for r in results]
 
             ap  = average_precision(retrieved_ids, relevant)
@@ -266,7 +191,7 @@ class Evaluator:
             all_p10 += p10
             all_r10 += r10
 
-            # colour-code: ✓ hit on rank-1, ~ partial, ✗ miss
+
             if retrieved_ids and retrieved_ids[0] in relevant:
                 mark = "✓"
             elif any(d in relevant for d in retrieved_ids):
@@ -317,9 +242,9 @@ class Evaluator:
         print(f"[OK] Saved → {path}")
 
 
-# ═══════════════════════════════════════════════════════════════
+
 #  MAIN
-# ═══════════════════════════════════════════════════════════════
+
 if __name__ == "__main__":
     INDEX_PATH = "data/index.json"
     if not os.path.exists(INDEX_PATH):

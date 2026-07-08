@@ -23,6 +23,11 @@ INSIDE INTERACTIVE SEARCH:
     stage:Final /all       -> ALL matching results
     mbappe AND goal        -> boolean search
     team:Argentina /all    -> all Argentina matches
+
+    --- NEW FEATURES ---
+    mess*                  -> wildcard search (prefix)
+    pen*                   -> any term starting with "pen"
+    messy                  -> auto spelling suggestion: "Did you mean: messi?"
 """
 
 import os
@@ -38,17 +43,17 @@ from inverted_index   import InvertedIndex
 from query_processor  import QueryProcessor
 from evaluator        import Evaluator, EVAL_TOPICS
 
-# ── file paths ────────────────────────────────────────────────
+#  file paths
 DATA_DIR       = "data"
 DOCUMENTS_PATH = os.path.join(DATA_DIR, "documents.json")
 INDEX_PATH     = os.path.join(DATA_DIR, "index.json")
 EVAL_RESULTS   = os.path.join(DATA_DIR, "eval_results.json")
 
 
-# ── pipeline ──────────────────────────────────────────────────
+# pipeline
 
 def build_index(csv_path: str) -> tuple[InvertedIndex, QueryProcessor]:
-    """Full pipeline: CSV -> documents -> preprocess -> index."""
+
     os.makedirs(DATA_DIR, exist_ok=True)
 
     print("\n" + "="*50)
@@ -74,7 +79,6 @@ def build_index(csv_path: str) -> tuple[InvertedIndex, QueryProcessor]:
 
 
 def load_existing_index() -> tuple[InvertedIndex, QueryProcessor]:
-    """Load a previously built index from disk."""
     if not os.path.exists(INDEX_PATH):
         print(f"[!] Index not found at {INDEX_PATH}")
         print("    Run first with:  python main.py --csv path/to/data.csv")
@@ -84,10 +88,29 @@ def load_existing_index() -> tuple[InvertedIndex, QueryProcessor]:
     return idx, QueryProcessor(idx)
 
 
-# ── display ───────────────────────────────────────────────────
+#  display
 
-def print_results(results, query: str, total_found: int):
-    """Print ranked results in a clean table."""
+def print_results(results, query: str, total_found: int, info: dict = None):
+    # ---- Wildcard expansion info ----
+    if info and info.get("wildcard_map"):
+        print()
+        for pattern, matched in info["wildcard_map"].items():
+            if matched:
+                shown = matched[:8]
+                extra = f" ... (+{len(matched)-8} more)" if len(matched) > 8 else ""
+                print(f"  [*] '{pattern}' expanded to: {', '.join(shown)}{extra}")
+            else:
+                print(f"  [!] '{pattern}' matched no terms in index")
+
+    #Spelling suggestion
+    if info and info.get("spelling"):
+        print()
+        for misspelled, suggestions in info["spelling"].items():
+            if suggestions:
+                best_word, best_dist = suggestions[0]
+                all_sugg = ", ".join(f"'{w}' (d={d})" for w, d in suggestions[:3])
+                print(f"  [?] Did you mean: {all_sugg}  (for '{misspelled}')")
+
     print(f"\n{'='*70}")
     print(f'  Query: "{query}"')
     print(f"  Showing {len(results)} of {total_found} total matches found")
@@ -95,6 +118,16 @@ def print_results(results, query: str, total_found: int):
 
     if not results:
         print("  [no results found]")
+
+
+        if info and info.get("spelling"):
+            print()
+            suggestions_flat = []
+            for misspelled, suggestions in info["spelling"].items():
+                if suggestions:
+                    suggestions_flat.append(f"'{suggestions[0][0]}'")
+            if suggestions_flat:
+                print(f"  Hint: try searching for {', '.join(suggestions_flat)}")
         return
 
     print(f"  {'Rank':<5} {'DocID':<7} {'Home':<22} {'Away':<22} "
@@ -113,7 +146,7 @@ def print_results(results, query: str, total_found: int):
               f"{stage:<18} {score:<8} {year:<6} {r.score:.3f}")
 
 
-# ── interactive search ────────────────────────────────────────
+# interactive search
 
 def interactive_search(qp: QueryProcessor):
     """Interactive search loop with variable result count."""
@@ -126,6 +159,8 @@ def interactive_search(qp: QueryProcessor):
     print("    negation  :  argentina NOT france")
     print("    field     :  team:Brazil  stage:Final  referee:Marciniak")
     print("    combined  :  team:Argentina stage:Final messi")
+    print("    wildcard  :  mess*   pen*   arg*   mba*")
+    print("    spelling  :  messy -> Did you mean: messi?  (auto)")
     print()
     print("  RESULT COUNT  (add at the end of any query):")
     print("    messi /5          ->  show top 5")
@@ -149,7 +184,7 @@ def interactive_search(qp: QueryProcessor):
             print("[exit]")
             break
 
-        # ── parse optional /N or /all suffix ──────────────────
+        #parse optional /N or /all suffix
         top_k = 10
         query = raw
 
@@ -158,7 +193,7 @@ def interactive_search(qp: QueryProcessor):
             val   = suffix_match.group(1).lower()
             query = raw[:suffix_match.start()].strip()
             if val == "all":
-                top_k = 964
+                top_k = 9999
             else:
                 try:
                     top_k = int(val)
@@ -166,14 +201,12 @@ def interactive_search(qp: QueryProcessor):
                     print(f"  [!] '/{val}' not recognised — using default 10")
                     top_k = 10
 
-        # ── run search ────────────────────────────────────────
-        # always retrieve everything, then slice — so we can show
-        # "X of Y total" even when the user asks for only 5
-        all_results = qp.search(query, top_k=964)
+        # run search
+        all_results, info = qp.search(query, top_k=9999)
         total_found = len(all_results)
         results     = all_results[:top_k]
 
-        print_results(results, query, total_found)
+        print_results(results, query, total_found, info)
 
         # helpful hint when results are truncated
         if total_found > top_k:
@@ -182,7 +215,7 @@ def interactive_search(qp: QueryProcessor):
                   f"add /{total_found} or /all to see everything]")
 
 
-# ── other modes ───────────────────────────────────────────────
+# other modes
 
 def run_evaluation(qp: QueryProcessor):
     ev      = Evaluator(qp)
@@ -198,21 +231,21 @@ def run_single_query(qp: QueryProcessor, query: str, top_k: int = 10):
         val   = suffix_match.group(1).lower()
         query = query[:suffix_match.start()].strip()
         if val == "all":
-            top_k = 964
+            top_k = 9999
         else:
             try:
                 top_k = int(val)
             except ValueError:
                 pass
-    all_results = qp.search(query, top_k=964)
+    all_results, info = qp.search(query, top_k=9999)
     total_found = len(all_results)
     results     = all_results[:top_k]
-    print_results(results, query, total_found)
+    print_results(results, query, total_found, info)
     if total_found > top_k:
         print(f"\n  [{total_found - top_k} more — add /all or /N to query to see more]")
 
 
-# ── main ──────────────────────────────────────────────────────
+# main
 
 def main():
     parser = argparse.ArgumentParser(description="World Cup IR Search System")

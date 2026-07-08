@@ -271,13 +271,13 @@ def preprocess_documents(documents: list[dict]) -> list[dict]:
     return documents
 
 
-# ==========================================
+
 # اجرای مستقیم برای تست
-# ==========================================
+
 if __name__ == "__main__":
     print("=== تست پیش‌پردازش ===\n")
 
-    # تست‌های مختلف
+
     test_cases = [
         "Goals by Kylian Mbappé 80' (P), Angel Di Maria 36'",
         "Argentina vs France, Final, Lusail Stadium",
@@ -306,7 +306,7 @@ if __name__ == "__main__":
         print(f"توکن‌ها: {tokens}")
         print()
 
-    # تست با اسناد واقعی اگر موجود باشد
+
     doc_path = "data/documents.json"
     import os
 
@@ -314,7 +314,6 @@ if __name__ == "__main__":
         with open(doc_path, encoding="utf-8") as f:
             docs = json.load(f)
 
-        # پیش‌پردازش اولین سند
         sample = docs[0]
         tokens = preprocess(sample["text"])
         print(f"--- نمونه سند ---")
