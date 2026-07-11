@@ -25,11 +25,16 @@ This project implements a lightweight IR system over a structured dataset of Wor
 ```
 IR-system/
 ├── data/
-│   └── worldcup_1930_2022.csv   # Main dataset
+│   └── documents.json
+|   |── eval_result.json
+|   └── index.json
+|
 ├── src/
 │   ├── indexer.py               # Builds inverted index
 │   ├── query_processor.py       # Parses and handles user queries
-│   ├── ranker.py                # Scores and ranks results
+│   ├── evaluator.py             # Scores and ranks results
+|   ├── processor.py             # Preprocess the data
+|   ├── documetn_builder.py      # Create documents from the csv file
 │   └── main.py                  # CLI entry point
 └── README.md
 ```
@@ -48,14 +53,6 @@ pip install -r requirements.txt
 python src/main.py
 ```
 
-## Example Queries
-
-```
-> Which team won in 1998?
-> Top scorers in 2014 World Cup
-> All matches where Iran played
-> Finals results from 1990 to 2022
-```
 
 ## Dataset
 
